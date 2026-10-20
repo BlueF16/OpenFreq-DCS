@@ -147,9 +147,7 @@
                             Padding="6,4"
                             Classes="Flat"
                             ToolTip.Tip="{Binding HasPttHotkey, Converter={StaticResource HotkeyTooltipConverter}}"
-                            IsEnabled="{Binding RadioStationData.Type, 
-                                 Converter={StaticResource InvertedEnumToBoolConverter}, 
-                                 ConverterParameter={x:Static models:RadioStationData+RadioStationType.BMS}}">
+                            IsEnabled="{Binding Settings.ModeIsGci}">
                         <StackPanel Orientation="Horizontal" Spacing="4">
                             <avalonia:MaterialIcon Kind="KeyboardOutline"
                                                    Width="18" Height="18" />

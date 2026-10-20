@@ -10,7 +10,8 @@ public partial class RadioStationData : ObservableObject
     {
         BMS,
         ACMI,
-        STATIONARY
+        STATIONARY,
+        DCS
     }
 
     [ObservableProperty]

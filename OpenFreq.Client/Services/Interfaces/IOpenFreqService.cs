@@ -112,6 +112,7 @@ public interface IOpenFreqService : IDisposable
     public enum Mode
     {
         GCI,
-        BMS
+        BMS,
+        DCS
     }
 }

@@ -125,7 +125,7 @@
                             <Border Background="{DynamicResource MaterialBackgroundBrush}"
                                     CornerRadius="8"
                                     Padding="4">
-                                <Grid ColumnDefinitions="*,*">
+                                <Grid ColumnDefinitions="*,*,*">
                                     <Grid.Styles>
                                         <Style Selector="RadioButton">
                                             <Setter Property="Theme"
@@ -134,7 +134,7 @@
                                     </Grid.Styles>
                                     <RadioButton Grid.Column="0"
                                                  GroupName="OwnPositionMode"
-                                                 IsChecked="{Binding !Settings.ModeIsGci}"
+                                                 IsChecked="{Binding Settings.ModeIsBms}"
                                                  Content="BMS"
                                                  FontWeight="Bold"
                                                  HorizontalAlignment="Stretch"
@@ -147,6 +147,14 @@
                                         </RadioButton.IsEnabled>
                                     </RadioButton>
                                     <RadioButton Grid.Column="1"
+                                                 GroupName="OwnPositionMode"
+                                                 IsChecked="{Binding Settings.ModeIsDcs}"
+                                                 Content="DCS"
+                                                 FontWeight="Bold"
+                                                 HorizontalAlignment="Stretch"
+                                                 HorizontalContentAlignment="Center"
+                                                 IsEnabled="{Binding !OpenFreqConnected}" />
+                                    <RadioButton Grid.Column="2"
                                                  GroupName="OwnPositionMode"
                                                  IsChecked="{Binding Settings.ModeIsGci}"
                                                  Content="GCI"
@@ -163,8 +171,16 @@
                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                         <StackPanel Margin="16">
 
+                            <controls:Card IsVisible="{Binding Settings.ModeIsDcs}">
+                                <StackPanel Margin="16" Spacing="8">
+                                    <TextBlock Text="DCS World - F-14 Pilot" FontWeight="Bold" />
+                                    <TextBlock Text="Install OpenFreqDCSExport.lua in Saved Games\DCS\Scripts. Local telemetry: 127.0.0.1:29340. Use the existing Tomcat UHF1/UHF2 microphone switches. DCS telemetry drives these radio slots." TextWrapping="Wrap" />
+                                    <TextBlock Text="No extra HOTAS PTT binding is required. ICS and RIO networking are not integrated in this build." TextWrapping="Wrap" Opacity="0.7" />
+                                </StackPanel>
+                            </controls:Card>
+
                             <!-- BMS Mode Settings -->
-                            <StackPanel IsVisible="{Binding !Settings.ModeIsGci}">
+                            <StackPanel IsVisible="{Binding Settings.ModeIsBms}">
                                 <!-- Connection Status Card -->
                                 <controls:Card>
                                     <StackPanel Margin="16">

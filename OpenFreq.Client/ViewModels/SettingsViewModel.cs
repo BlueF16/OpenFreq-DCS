@@ -62,13 +62,27 @@ public partial class SettingsViewModel : ViewModelBase, IDisposable
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ModeIsGci))]
+    [NotifyPropertyChangedFor(nameof(ModeIsBms))]
+    [NotifyPropertyChangedFor(nameof(ModeIsDcs))]
     [NotifyPropertyChangedFor(nameof(IsReadyToConnect))]
     private IOpenFreqService.Mode _connectionMode = IOpenFreqService.Mode.BMS;
 
     public bool ModeIsGci
     {
         get => ConnectionMode == IOpenFreqService.Mode.GCI;
-        set => ConnectionMode = value ? IOpenFreqService.Mode.GCI : IOpenFreqService.Mode.BMS;
+        set { if (value) ConnectionMode = IOpenFreqService.Mode.GCI; }
+    }
+
+    public bool ModeIsBms
+    {
+        get => ConnectionMode == IOpenFreqService.Mode.BMS;
+        set { if (value) ConnectionMode = IOpenFreqService.Mode.BMS; }
+    }
+
+    public bool ModeIsDcs
+    {
+        get => ConnectionMode == IOpenFreqService.Mode.DCS;
+        set { if (value) ConnectionMode = IOpenFreqService.Mode.DCS; }
     }
 
     [ObservableProperty]
@@ -117,6 +131,7 @@ public partial class SettingsViewModel : ViewModelBase, IDisposable
     private readonly IFalconSharedMemoryService _falconSharedMemoryService;
     private readonly IAcmiClientService _acmiClientService;
     private readonly IOpenFreqService _openFreqService;
+    private readonly IDcsTelemetryService? _dcsTelemetryService;
     private readonly IHotkeyService _hotkeyService;
 
     // Window size & position. Nullable so values never captured (e.g. app closed while
@@ -165,13 +180,26 @@ public partial class SettingsViewModel : ViewModelBase, IDisposable
     partial void OnConnectionModeChanged(IOpenFreqService.Mode value)
     {
         _logger.LogInformation("Connection mode changed to {Mode}", value);
+        // Keep simulator adapters exclusive; BMS mutex ownership must never be taken in DCS mode.
+        _openFreqService.SetOwnPositionMode(value);
+        if (value != IOpenFreqService.Mode.DCS) _dcsTelemetryService?.Stop();
         switch (value)
         {
             case IOpenFreqService.Mode.BMS:
+                if (_falconSharedMemoryService.IsFlying != true) _hotkeyService.ResumePttKeys();
                 _falconSharedMemoryService.Start();
                 _falconRadioSharedMemoryService.Start();
                 _acmiClientService.DisconnectAsync().Wait(50);
                 _acmiClientService.Stop();
+                break;
+            case IOpenFreqService.Mode.DCS:
+                Is3dMode = true;
+                _falconSharedMemoryService.Stop();
+                _falconRadioSharedMemoryService.Stop();
+                _acmiClientService.Stop();
+                _hotkeyService.PausePttKeys();
+                try { _dcsTelemetryService?.Start(); }
+                catch (Exception ex) { _logger.LogError(ex, "DCS UDP listener failed to start"); }
                 break;
             case IOpenFreqService.Mode.GCI:
                 Is3dMode = false;
@@ -226,7 +254,7 @@ public partial class SettingsViewModel : ViewModelBase, IDisposable
 
     public SettingsViewModel(ILogger<SettingsViewModel> logger, IAudioService audioService, IFalconRadioSharedMemoryService falconRadioSharedMemoryService,
         IFalconSharedMemoryService falconSharedMemoryService, IAcmiClientService acmiClientService,
-        IOpenFreqService openFreqService, IHotkeyService hotkeyService)
+        IOpenFreqService openFreqService, IHotkeyService hotkeyService, IDcsTelemetryService? dcsTelemetryService = null)
     {
         _logger = logger;
         _audioService = audioService;
@@ -234,6 +262,7 @@ public partial class SettingsViewModel : ViewModelBase, IDisposable
         _falconRadioSharedMemoryService = falconRadioSharedMemoryService;
         _acmiClientService = acmiClientService;
         _openFreqService = openFreqService;
+        _dcsTelemetryService = dcsTelemetryService;
         _hotkeyService = hotkeyService;
         InitializeAudioDevices();
         InitializeBmsDetection();

@@ -25,6 +25,7 @@ public static class ServiceCollectionExtensions
             builder.AddSerilog(dispose: true);
         });
 
+        services.AddSingleton<IDcsTelemetryService, DcsTelemetryService>();
         services.AddSingleton<IAudioService, AudioService>();
         services.AddSingleton<IRtcClientFactory, OpenFreqRtcClientFactory>();
         services.AddSingleton<IPlaybackServiceFactory, RadioPlaybackServiceFactory>();

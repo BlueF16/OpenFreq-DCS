@@ -1,0 +1,17 @@
+{
+  "baseline": "OpenFreq 1.1.5",
+  "changed_files": {
+    "DUAL_SIM_INTEGRATION.md": "358223d19c6052ec1ec008eb3cd3e56728dc93a3caea03ff5ba8a4be2683c42e",
+    "OpenFreq.Client.Tests/DcsTelemetryServiceTests.cs": "d978f34c9f4d64fe93271f2273baa86ed1aca1b83394323f15f3642aa14f2540",
+    "OpenFreq.Client/ViewModels/MainWindowViewModel.cs": "1d476bc8910c1ba11df88e4d446769560ea76d013cd2d9b10811253341e8f079",
+    "OpenFreq.Client/ViewModels/ChannelCardListViewModel.cs": "e106fc6b36b54ac4416692f35948eaa8cc95c9cba7a490be54b232569fd014f4",
+    "OpenFreq.Client/ViewModels/SettingsViewModel.cs": "dba1def17c563ce019182da75080bc6d83b0fb64369bbbb3426343237c86f8a3",
+    "OpenFreq.Client/Views/ChannelCardView.axaml": "f1725f41792a703ffb915b29d532eea7fbc4aa6fa07103ce9f5d7a6d13136d3f",
+    "OpenFreq.Client/Views/MainWindow.axaml": "d1202ce8ac5a77d79e0cc66456c9fbe409f64f4b7dc9c4f1e8c2b42c3e2c6ed3",
+    "OpenFreq.Client/Services/ServiceCollectionExtensions.cs": "eb386380772da6a204d865ef61c1feabf8eacba67f640a6a052cef06b81c8e74",
+    "OpenFreq.Client/Services/OpenFreqService.cs": "ff3af9be7fa080f343d88700cf4667688a36d039d7d20c4f7db70c31fafb0fee",
+    "OpenFreq.Client/Services/DcsTelemetryService.cs": "19df8b861695c35f74c926041709e533dc11c539ca696dfbee5a0e9b6d6cac08",
+    "OpenFreq.Client/Models/RadioStationData.cs": "97d762e6a9bfaa599c97dadc9f64edfcc16ad977f0a91e5866f8577ad7d5e435",
+    "OpenFreq.Client/Services/Interfaces/IOpenFreqService.cs": "dc81024232acde8e5c44a414ffb36249741c610c7ee9dbdccb351b687ceffd90"
+  }
+}

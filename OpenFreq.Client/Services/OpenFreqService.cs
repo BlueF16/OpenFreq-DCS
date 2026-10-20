@@ -80,6 +80,7 @@ public class OpenFreqService : IOpenFreqService
 
     private ISignalCalculator? _signalCalculator;
     private readonly IAcmiClientService _acmiClientService;
+    private readonly IDcsTelemetryService? _dcsTelemetryService;
     private readonly SignalStrengthTracker _signalStrengthTracker;
 
     private int _recordingDeviceIndex;
@@ -150,13 +151,14 @@ public class OpenFreqService : IOpenFreqService
         IFalconRadioSharedMemoryService falconRadioSharedMemoryService, ILogger<OpenFreqService> logger,
         ILoggerFactory loggerFactory, IAcmiClientService acmiClientService,
         IRtcClientFactory rtcClientFactory, IPlaybackServiceFactory playbackServiceFactory,
-        ISignalCalculatorFactory signalCalculatorFactory)
+        ISignalCalculatorFactory signalCalculatorFactory, IDcsTelemetryService? dcsTelemetryService = null)
     {
         _falconSharedMemoryService = falconSharedMemoryService;
         _falconRadioSharedMemoryService = falconRadioSharedMemoryService;
         _logger = logger;
         _loggerFactory = loggerFactory;
         _acmiClientService = acmiClientService;
+        _dcsTelemetryService = dcsTelemetryService;
         _rtcClientFactory = rtcClientFactory;
         _playbackServiceFactory = playbackServiceFactory;
         _signalCalculatorFactory = signalCalculatorFactory;
@@ -1099,6 +1101,7 @@ public class OpenFreqService : IOpenFreqService
                     break;
                 }
             case IOpenFreqService.Mode.GCI:
+            case IOpenFreqService.Mode.DCS:
                 _falconSharedMemoryService.Stop();
                 break;
             default:
@@ -1334,6 +1337,13 @@ public class OpenFreqService : IOpenFreqService
                 return new Vector3(BmsHeightmapConverter.ToHeightmap(_falconSharedMemoryService.Position.X,
                     _falconSharedMemoryService.Position.Y, _falconSharedMemoryService.Position.Z));
 
+            case RadioStationData.RadioStationType.DCS:
+                // DCS axes: X east, Z north, Y altitude MSL. All clients in the same
+                // DCS terrain use a consistent local map frame; no BMS heightmap transform.
+                var dcs = _dcsTelemetryService?.Latest;
+                return dcs?.WorldX is { } x && dcs.WorldY is { } y && dcs.WorldZ is { } z
+                    ? new Vector3(z, x, y) : null;
+
             case RadioStationData.RadioStationType.STATIONARY:
                 var position = tunedFrequencyData.RadioStation.Vector3;
                 return new Vector3(position.X, position.Y,
@@ -1376,6 +1386,10 @@ public class OpenFreqService : IOpenFreqService
                     bmsVel.X * feetToMeters, // East (swap X to second component)
                     bmsVel.Z * feetToMeters // Up (Z already inverted to Up in service)
                 );
+
+            case RadioStationData.RadioStationType.DCS:
+                // Velocity is not in the current DCS exporter; refrain from inventing it.
+                return null;
 
             case RadioStationData.RadioStationType.STATIONARY:
                 // we are stationary, duh
@@ -1631,7 +1645,7 @@ public class OpenFreqService : IOpenFreqService
     /// </summary>
     private int? GameTimeSeconds() => OwnPositionMode == IOpenFreqService.Mode.BMS
         ? _falconSharedMemoryService.GameTimeSeconds
-        : _acmiClientService.GameTimeSeconds;
+        : OwnPositionMode == IOpenFreqService.Mode.DCS ? null : _acmiClientService.GameTimeSeconds;
 
     /// <summary>
     /// Route received audio to playback service with RF effects

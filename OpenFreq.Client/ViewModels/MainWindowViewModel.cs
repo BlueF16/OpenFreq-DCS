@@ -198,6 +198,7 @@ public partial class MainWindowViewModel : ViewModelBase, IAsyncDisposable
 
     private void OnAircraftInfoChanged(object? sender, AircraftInfoChangedEventArgs e)
     {
+        if (Settings.ConnectionMode != IOpenFreqService.Mode.BMS) return;
         _logger.LogDebug("BMS Aircraft info changed: {nctr} to preset {name}", e.AcNCTR, e.AcName);
         // If we are in 3d, the SHMEM AcName and AcNCTR fields are now populated.
 
@@ -402,6 +403,7 @@ public partial class MainWindowViewModel : ViewModelBase, IAsyncDisposable
 
     private async void OnIvcStatusChanged(object? sender, IvcStatusChangedEventArgs ivcStatusChangedEventArgs)
     {
+        if (Settings.ConnectionMode != IOpenFreqService.Mode.BMS) return;
         try
         {
             await Dispatcher.UIThread.InvokeAsync(async () =>
@@ -500,12 +502,14 @@ public partial class MainWindowViewModel : ViewModelBase, IAsyncDisposable
 
     private void OnFlyingStateChanged(object? sender, FlyingStateChangedEventArgs e)
     {
-        Dispatcher.UIThread.Post(() => Settings.Is3dMode = e.NewFlyingState);
+        if (Settings.ConnectionMode == IOpenFreqService.Mode.BMS)
+            Dispatcher.UIThread.Post(() => Settings.Is3dMode = e.NewFlyingState);
     }
 
     private void FalconRadioSharedMemoryServiceOnConnectionParametersChanged(object? sender,
         ConnectionParametersChangedEventArgs e)
     {
+        if (Settings.ConnectionMode != IOpenFreqService.Mode.BMS) return;
         _logger.LogDebug($"FalconRadioSharedMemoryServiceOnConnectionParametersChanged: {e.NewParameters}");
 
         // BMS wants us to close the client
@@ -531,8 +535,6 @@ public partial class MainWindowViewModel : ViewModelBase, IAsyncDisposable
             _falconRadioSharedMemoryService.RemoveClientStatus(ClientStatusFlags.ExitReceived);
             _falconRadioSharedMemoryService.AddClientStatus(ClientStatusFlags.ClientActive);
             _falconRadioSharedMemoryService.AddClientStatus(ClientStatusFlags.TryingToConnect);
-            _logger.LogInformation("BMS requested a connection to address \"{Address}\", port {Port}",
-                e.NewParameters.Address, e.NewParameters.Port);
             Settings.OpenFreqPassword = e.NewParameters.Password;
             Settings.OpenFreqServerAddress = e.NewParameters.Address + ":" + e.NewParameters.Port;
             var failFlag = ClientStatusFlags.ConnectionFail;
@@ -594,6 +596,7 @@ public partial class MainWindowViewModel : ViewModelBase, IAsyncDisposable
 
     private void OnLogbookNameChanged(object? sender, LogbookNameChangedEventArgs e)
     {
+        if (Settings.ConnectionMode != IOpenFreqService.Mode.BMS) return;
         // BMS initialises Telemetry::m_logbookName to "Wot Pilot?!" before the session
         // is established; the real callsign is only written after ClientReady().
         // Ignore the sentinel so we never push the placeholder as a display name.
@@ -980,8 +983,10 @@ public partial class MainWindowViewModel : ViewModelBase, IAsyncDisposable
 
     private void OnSettingsPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName != nameof(Settings.Is3dMode)) return;
-        Dispatcher.UIThread.Post(UpdateModeDependent);
+        if (e.PropertyName == nameof(Settings.ConnectionMode))
+            _openFreqService.SetOwnPositionMode(Settings.ConnectionMode);
+        if (e.PropertyName == nameof(Settings.Is3dMode))
+            Dispatcher.UIThread.Post(UpdateModeDependent);
     }
 
     private void UpdateModeDependent()
@@ -1041,6 +1046,7 @@ public partial class MainWindowViewModel : ViewModelBase, IAsyncDisposable
             // Load locations
             foreach (var locationData in config.Locations)
             {
+                if (locationData.RadioStationData.Type == RadioStationData.RadioStationType.DCS) continue;
                 var location = ChannelList.CreateLocation(locationData);
                 location.Latitude = locationData.Latitude;
                 location.Longitude = locationData.Longitude;
@@ -1077,7 +1083,8 @@ public partial class MainWindowViewModel : ViewModelBase, IAsyncDisposable
             {
                 Settings = Settings.GetSettings(),
                 Locations = ChannelList.Locations
-                    .Where(cg => !cg.Equals(ChannelList.FalconLocation))
+                    .Where(cg => cg.RadioStationData.Type is not
+                        (RadioStationData.RadioStationType.BMS or RadioStationData.RadioStationType.DCS))
                     .Select(cg =>
                     {
                         return new LocationData

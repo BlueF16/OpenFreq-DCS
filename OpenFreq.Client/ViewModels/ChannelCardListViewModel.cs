@@ -21,6 +21,7 @@ using OpenFreq.Services.Acmi;
 using OpenFreq.Utilities;
 using OpenFreqAudio;
 using OpenFreqClient.Models;
+using OpenFreqClient.Services;
 using OpenFreqClient.Services.Interfaces;
 using OpenFreqClient.Views.Util;
 using SharpHook.Data;
@@ -35,7 +36,13 @@ public partial class ChannelCardListViewModel : ViewModelBase, IDisposable
     private readonly ILogger<ChannelCardListViewModel> _logger;
     private readonly IFalconRadioSharedMemoryService _falconRadioSharedMemoryService;
     private readonly IFalconSharedMemoryService _falconSharedMemoryService;
+    private readonly IDcsTelemetryService? _dcsTelemetryService;
     private readonly SettingsViewModel _settings;
+    private const string DcsLocationName = "DCS F-14 Radios";
+    private LocationViewModel? _dcsLocation;
+    private readonly Dictionary<int, bool> _dcsTransmitting = new();
+    private readonly Lock _dcsQueueLock = new();
+    private Task _dcsQueueTail = Task.CompletedTask;
 
     private const string BmsLocationName = "BMS Channels";
     public LocationViewModel? FalconLocation { get; internal set; }
@@ -74,15 +81,19 @@ public partial class ChannelCardListViewModel : ViewModelBase, IDisposable
 
     // Collection used to display filtered locations (BMS or GCI mode)
     public IEnumerable<LocationViewModel> Locations =>
-        _settings.ConnectionMode == IOpenFreqService.Mode.BMS
-            ? AllLocations.Where(g => g.RadioStationData.Type == RadioStationData.RadioStationType.BMS)
-            : AllLocations.Where(g => g.RadioStationData.Type != RadioStationData.RadioStationType.BMS);
+        _settings.ConnectionMode switch
+        {
+            IOpenFreqService.Mode.BMS => AllLocations.Where(g => g.RadioStationData.Type == RadioStationData.RadioStationType.BMS),
+            IOpenFreqService.Mode.DCS => AllLocations.Where(g => g.RadioStationData.Type == RadioStationData.RadioStationType.DCS),
+            _ => AllLocations.Where(g => g.RadioStationData.Type is not (RadioStationData.RadioStationType.BMS or RadioStationData.RadioStationType.DCS))
+        };
 
 
     public ChannelCardListViewModel(IOpenFreqService openFreqService, IHotkeyService hotkeyService,
         IAcmiClientService acmiClientService, ILogger<ChannelCardListViewModel> logger,
         IFalconRadioSharedMemoryService falconRadioSharedMemoryService,
-        IFalconSharedMemoryService falconSharedMemoryService, SettingsViewModel settingsViewModel)
+        IFalconSharedMemoryService falconSharedMemoryService, SettingsViewModel settingsViewModel,
+        IDcsTelemetryService? dcsTelemetryService = null)
     {
         _openFreqService = openFreqService;
         _hotkeyService = hotkeyService;
@@ -90,6 +101,8 @@ public partial class ChannelCardListViewModel : ViewModelBase, IDisposable
         _logger = logger;
         _falconRadioSharedMemoryService = falconRadioSharedMemoryService;
         _falconSharedMemoryService = falconSharedMemoryService;
+        _dcsTelemetryService = dcsTelemetryService;
+        if (_dcsTelemetryService != null) _dcsTelemetryService.SnapshotChanged += OnDcsSnapshotChanged;
         _settings = settingsViewModel;
         _settings.PropertyChanged += OnSettingsChanged;
 
@@ -138,6 +151,8 @@ public partial class ChannelCardListViewModel : ViewModelBase, IDisposable
     {
         if (e.PropertyName == nameof(SettingsViewModel.ConnectionMode))
         {
+            // An adapter change must release all old PTT/memberships before new service starts.
+            // UI disallows mode changes while network-connected.
             OnPropertyChanged(nameof(Locations));
             if (SelectedLocation == null || !Locations.Contains(SelectedLocation))
                 SelectedLocation = Locations.FirstOrDefault();
@@ -206,10 +221,14 @@ public partial class ChannelCardListViewModel : ViewModelBase, IDisposable
     private void OnOpenFreqConnectionStateChanged(object? sender, ConnectionStateChangedEventArgs args)
     {
         var e = args.State;
-        if (e == ConnectionState.Authenticated && !_settings.ModeIsGci)
+        if (e == ConnectionState.Authenticated && _settings.ConnectionMode == IOpenFreqService.Mode.BMS)
         {
             _logger.LogDebug("OpenFreq authenticated, importing and joining BMS channels");
             StartBmsImport();
+        }
+        else if (e == ConnectionState.Authenticated && _settings.ConnectionMode == IOpenFreqService.Mode.DCS)
+        {
+            OnDcsSnapshotChanged(this, _dcsTelemetryService?.Latest);
         }
         else if (e == ConnectionState.Authenticated && _settings.ModeIsGci)
         {
@@ -240,7 +259,7 @@ public partial class ChannelCardListViewModel : ViewModelBase, IDisposable
 
     private void OnRadioVolumeChanged(object? sender, RadioVolumeChangedEventArgs e)
     {
-        if (_settings.ModeIsGci || FalconLocation == null) return;
+        if (_settings.ConnectionMode != IOpenFreqService.Mode.BMS || FalconLocation == null) return;
 
         _logger.LogDebug($"VOLUME {e.OldVolume} -> {e.NewVolume}");
 
@@ -257,11 +276,15 @@ public partial class ChannelCardListViewModel : ViewModelBase, IDisposable
         }
     }
 
-    private void OnRadioPowerChanged(object? sender, RadioPowerChangedEventArgs e) => QueueSlotSwitch(e.RadioType);
+    private void OnRadioPowerChanged(object? sender, RadioPowerChangedEventArgs e)
+    {
+        if (_settings.ConnectionMode == IOpenFreqService.Mode.BMS) QueueSlotSwitch(e.RadioType);
+    }
 
     private async void OnConnectionParametersChanged(object? sender,
         ConnectionParametersChangedEventArgs e)
     {
+        if (_settings.ConnectionMode != IOpenFreqService.Mode.BMS) return;
         // Delete the BMS location on both TerminateClient and plain MP disconnect (ReadyToTransmit → false).
         if (e.NewParameters.TerminateClient || (e.OldParameters.ReadyToTransmit && !e.NewParameters.ReadyToTransmit))
         {
@@ -334,6 +357,7 @@ public partial class ChannelCardListViewModel : ViewModelBase, IDisposable
 
     private void OnFlyingStateChanged(object? sender, FlyingStateChangedEventArgs e)
     {
+        if (_settings.ConnectionMode != IOpenFreqService.Mode.BMS) return;
         _logger.LogDebug($"FalconSharedMemoryServiceOnFlyingStateChanged: {e.OldFlyingState} -> {e.NewFlyingState}");
         if (!e.OldFlyingState && e.NewFlyingState)
         {
@@ -449,7 +473,8 @@ public partial class ChannelCardListViewModel : ViewModelBase, IDisposable
     private void OnBmsPttChanged(object? sender, RadioPttChangedEventArgs e)
     {
         // Do NOT capture keys twice - for non-flying, we want to use the callbacks from our HotKey service
-        if (!_hotkeyService.PttKeysPaused || _falconSharedMemoryService.IsFlying == false)
+        if (_settings.ConnectionMode != IOpenFreqService.Mode.BMS ||
+            !_hotkeyService.PttKeysPaused || _falconSharedMemoryService.IsFlying == false)
             return;
 
         if (FalconLocation == null)
@@ -507,7 +532,7 @@ public partial class ChannelCardListViewModel : ViewModelBase, IDisposable
 
     private void OnBmsFrequencyChanged(object? sender, RadioFrequencyChangedEventArgs e)
     {
-        if (_settings.ModeIsGci) return;
+        if (_settings.ConnectionMode != IOpenFreqService.Mode.BMS) return;
         if (FalconLocation == null)
         {
             _logger.LogWarning("Unclean state: FalconLocation is null, reimporting");
@@ -530,7 +555,7 @@ public partial class ChannelCardListViewModel : ViewModelBase, IDisposable
     /// </remarks>
     private void QueueSlotSwitch(RadioType radioType)
     {
-        if (_settings.ModeIsGci) return;
+        if (_settings.ConnectionMode != IOpenFreqService.Mode.BMS) return;
 
         var location = FalconLocation;
         if (location == null) return;
@@ -604,6 +629,101 @@ public partial class ChannelCardListViewModel : ViewModelBase, IDisposable
             card.FrequencyKhz, string.Join(", ", joined));
     }
 
+
+
+    /// <summary>
+    /// DCS updates are serialized as one queue. Each retune waits for any previous leave/start/stop
+    /// to finish; otherwise a fast cockpit frequency change could strand a server membership.
+    /// </summary>
+    private void OnDcsSnapshotChanged(object? sender, DcsTelemetrySnapshot? snapshot)
+    {
+        if (_settings.ConnectionMode != IOpenFreqService.Mode.DCS) return;
+        lock (_dcsQueueLock)
+        {
+            var previous = _dcsQueueTail;
+            _dcsQueueTail = Task.Run(async () =>
+            {
+                await previous;
+                try { await ApplyDcsSnapshotAsync(snapshot); }
+                catch (Exception ex) { _logger.LogError(ex, "DCS radio sync failed"); }
+            });
+        }
+    }
+
+    private async Task ApplyDcsSnapshotAsync(DcsTelemetrySnapshot? snapshot)
+    {
+        if (_settings.ConnectionMode != IOpenFreqService.Mode.DCS) return;
+        if (snapshot == null)
+        {
+            if (_dcsLocation != null)
+            {
+                foreach (var card in _dcsLocation.Channels)
+                {
+                    if (_dcsTransmitting.GetValueOrDefault((int)card.BmsRadioType!.Value + 1))
+                        await _openFreqService.StopTransmissionAsync(card.Id);
+                    await _dcsLocation.ApplySlotStateAsync(card, card.FrequencyKhz, false);
+                }
+            }
+            _dcsTransmitting.Clear();
+            return;
+        }
+        // Frames may arrive before network authentication; use the latest one at login.
+        if (!_openFreqService.IsAuthenticated) return;
+        if (_dcsLocation == null)
+        {
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (_dcsLocation != null) return;
+                _dcsLocation = CreateLocation(DcsLocationName, RadioStationPresets.FighterF16,
+                    RadioStationData.RadioStationType.DCS);
+                foreach (var id in new[] { 1, 2 })
+                {
+                    var type = id == 1 ? RadioType.Radio1 : RadioType.Radio2;
+                    var card = _dcsLocation.CreateChannel(0,
+                        id == 1 ? "UHF1 ARC-159" : "UHF2 ARC-182", false, type);
+                    card.IsEditable = false;
+                    card.Pan = id == 1 ? _settings.BmsRadio1Pan : _settings.BmsRadio2Pan;
+                }
+                SelectedLocation = _dcsLocation;
+            });
+        }
+        var location = _dcsLocation;
+        if (location == null) return;
+        foreach (var id in new[] { 1, 2 })
+        {
+            var card = location.Channels.FirstOrDefault(c => c.BmsRadioType ==
+                (id == 1 ? RadioType.Radio1 : RadioType.Radio2));
+            if (card == null) continue;
+            snapshot.Radios.TryGetValue(id, out var radio);
+            int frequency = radio?.FrequencyKhz ?? card.FrequencyKhz;
+            bool enabled = radio?.PowerOn == true && radio.FrequencyKhz is >= 20000 and <= 500000 &&
+                radio.Modulation == "AM"; // Original OpenFreq currently has no AM/FM channel identity.
+            bool shouldTransmit = enabled && snapshot.PttPressed == true &&
+                                  snapshot.SelectedTxRadio == id && radio?.PttPressed == true;
+            bool transmitting = _dcsTransmitting.GetValueOrDefault(id);
+
+            // Stop before retuning or switching power to avoid ghost TX on the old frequency.
+            if (transmitting && (!shouldTransmit || frequency != card.FrequencyKhz))
+            {
+                await _openFreqService.StopTransmissionAsync(card.Id);
+                transmitting = false;
+            }
+            if (frequency != card.FrequencyKhz ||
+                _openFreqService.IsFrequencyJoined(card.FrequencyKhz, card.Id) != enabled)
+                await location.ApplySlotStateAsync(card, frequency, enabled);
+
+            if (enabled && radio?.Volume is { } volume)
+                _openFreqService.SetVolume(card.FrequencyKhz, card.Id, (float)Math.Clamp(volume, 0, 1));
+
+            if (shouldTransmit && !transmitting &&
+                _openFreqService.IsFrequencyJoined(card.FrequencyKhz, card.Id))
+            {
+                await _openFreqService.StartTransmissionAsync(card.FrequencyKhz, card.Id);
+                transmitting = true;
+            }
+            _dcsTransmitting[id] = transmitting;
+        }
+    }
 
     private async Task HandleStartTransmissionAsync(StartTransmissionMessage msg)
     {
@@ -754,6 +874,7 @@ public partial class ChannelCardListViewModel : ViewModelBase, IDisposable
 
     public void Dispose()
     {
+        if (_dcsTelemetryService != null) _dcsTelemetryService.SnapshotChanged -= OnDcsSnapshotChanged;
         _falconRadioSharedMemoryService.ConnectionParametersChanged -= OnConnectionParametersChanged;
         _falconRadioSharedMemoryService.FrequencyChanged -= OnBmsFrequencyChanged;
         _falconRadioSharedMemoryService.PttChanged -= OnBmsPttChanged;
